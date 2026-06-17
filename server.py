@@ -2,6 +2,7 @@ import socket
 
 HOST = "0.0.0.0"
 PORT = 9000
+BUFFER_SIZE = 1400
 
 
 def start_server():
@@ -16,6 +17,10 @@ def start_server():
         while True:
             conn, addr = server_socket.accept()
             print(f"Connected by {addr}")
+
+            data = conn.recv(BUFFER_SIZE)
+            print(f"Received: {data.decode('utf-8')}")
+
             conn.close()
 
 
