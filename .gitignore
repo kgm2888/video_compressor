@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+input/*.mp4
+received/*.mp4
+received/*.tmp
