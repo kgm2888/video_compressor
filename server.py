@@ -1,9 +1,13 @@
+import os
 import socket
 
 HOST = "0.0.0.0"
 PORT = 9000
 
 HEADER_SIZE = 32
+BUFFER_SIZE = 1400
+
+RECEIVED_DIR = "received"
 
 
 def recv_exact(conn: socket.socket, size: int) -> bytes:
@@ -21,6 +25,8 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
 
 
 def start_server():
+    os.makedirs(RECEIVED_DIR, exist_ok=True)
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
         server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -37,6 +43,26 @@ def start_server():
             file_size = int(header.decode("utf-8").strip())
 
             print(f"File size: {file_size} bytes")
+
+            received_path = os.path.join(RECEIVED_DIR, "received_sample.mp4")
+
+            received_size = 0
+
+            with open(received_path, "wb") as f:
+                while received_size < file_size:
+                    remaining_size = file_size - received_size
+                    read_size = min(BUFFER_SIZE, remaining_size)
+
+                    data = conn.recv(read_size)
+
+                    if not data:
+                        break
+
+                    f.write(data)
+                    received_size += len(data)
+
+            print(f"受信完了: {received_size} bytes")
+            print(f"保存先: {received_path}")
 
             conn.close()
 

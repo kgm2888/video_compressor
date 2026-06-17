@@ -6,6 +6,7 @@ HOST = "127.0.0.1"
 PORT = 9000
 
 HEADER_SIZE = 32
+BUFFER_SIZE = 1400
 
 
 def create_file_size_header(file_size: int) -> bytes:
@@ -24,9 +25,22 @@ def main():
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
         client_socket.connect((HOST, PORT))
+
         client_socket.sendall(header)
 
-    print(f"Sent file size: {file_size} bytes")
+        sent_size = 0
+
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(BUFFER_SIZE)
+
+                if not chunk:
+                    break
+
+                client_socket.sendall(chunk)
+                sent_size += len(chunk)
+
+    print(f"送信完了: {sent_size} bytes")
 
 
 if __name__ == "__main__":
