@@ -6,6 +6,7 @@ PORT = 9000
 
 HEADER_SIZE = 32
 BUFFER_SIZE = 1400
+RESPONSE_SIZE = 16
 
 RECEIVED_DIR = "received"
 
@@ -22,6 +23,10 @@ def recv_exact(conn: socket.socket, size: int) -> bytes:
         data += packet
 
     return data
+
+
+def make_response(message: str) -> bytes:
+    return message.encode("utf-8")[:RESPONSE_SIZE].ljust(RESPONSE_SIZE, b"\0")
 
 
 def start_server():
@@ -63,6 +68,8 @@ def start_server():
 
             print(f"受信完了: {received_size} bytes")
             print(f"保存先: {received_path}")
+
+            conn.sendall(make_response("SUCCESS"))
 
             conn.close()
 
