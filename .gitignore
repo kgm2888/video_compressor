@@ -4,3 +4,7 @@ __pycache__/
 input/*.mp4
 received/*.mp4
 received/*.tmp
+
+sawa/input/*.mp4
+sawa/received/*.mp4
+sawa/received/*.tmp

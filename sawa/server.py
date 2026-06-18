@@ -9,7 +9,8 @@ HEADER_SIZE = 32
 BUFFER_SIZE = 1400
 RESPONSE_SIZE = 16
 
-RECEIVED_DIR = "received"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RECEIVED_DIR = os.path.join(BASE_DIR, "received")
 MAX_FILE_SIZE = 4 * 1024 * 1024 * 1024  # 4GB
 
 
