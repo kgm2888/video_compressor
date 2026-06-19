@@ -40,7 +40,7 @@ with open(file_path, "rb") as file:
     while True:
         #最大1400バイトまで読み込む。
         chunk = file.read(1400)
-
+    
         if not chunk:
             break
 
