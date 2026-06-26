@@ -5,6 +5,7 @@ from pathlib import Path
 
 try:
     from .processor import (
+        FFmpegProcessError,
         change_aspect_ratio,
         compress_video,
         convert_to_mp3,
@@ -12,9 +13,13 @@ try:
         create_webm,
         resize_video,
     )
-    from .protocol import unpack_mmp_header
+    from .protocol import (
+        create_mmp_header,
+        unpack_mmp_header,
+    )
 except ImportError:
     from processor import (
+        FFmpegProcessError,
         change_aspect_ratio,
         compress_video,
         convert_to_mp3,
@@ -22,7 +27,10 @@ except ImportError:
         create_webm,
         resize_video,
     )
-    from protocol import unpack_mmp_header
+    from protocol import (
+        create_mmp_header,
+        unpack_mmp_header,
+    )
 
 
 HOST = "0.0.0.0"
@@ -30,6 +38,7 @@ PORT = 9000
 
 HEADER_SIZE = 8
 BUFFER_SIZE = 64 * 1024
+CLIENT_TIMEOUT_SECONDS = 300
 
 MAX_JSON_SIZE = (1 << 16) - 1
 MAX_MEDIA_TYPE_SIZE = (1 << 8) - 1
@@ -56,7 +65,19 @@ OUTPUT_SUFFIXES = {
 }
 
 
+OUTPUT_MEDIA_TYPES = {
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+    ".gif": "image/gif",
+    ".webm": "video/webm",
+}
+
+
 def recv_exact(conn: socket.socket, size: int) -> bytes:
+    """
+    指定されたsizeバイトを受信し終わるまで、
+    conn.recv()を繰り返す。
+    """
     data = b""
 
     while len(data) < size:
@@ -139,11 +160,100 @@ def receive_file(
         )
 
 
+def send_file(
+    conn: socket.socket,
+    file_path: Path,
+) -> None:
+    """
+    処理後ファイルを分割して送信する。
+    """
+    with file_path.open("rb") as input_file:
+        while True:
+            data = input_file.read(BUFFER_SIZE)
+
+            if not data:
+                break
+
+            conn.sendall(data)
+
+
+def send_response(
+    conn: socket.socket,
+    response_data: dict,
+    media_type: str = "",
+    payload_path: Path | None = None,
+) -> None:
+    """
+    共通ヘッダー、JSON、メディアタイプ、
+    処理後ファイルの順番でクライアントへ送信する。
+    """
+    json_bytes = json.dumps(
+        response_data,
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    media_type_bytes = media_type.encode("utf-8")
+
+    if len(json_bytes) > MAX_JSON_SIZE:
+        raise ValueError(
+            "レスポンスJSONが大きすぎます。"
+        )
+
+    if len(media_type_bytes) > MAX_MEDIA_TYPE_SIZE:
+        raise ValueError(
+            "レスポンスのメディアタイプが長すぎます。"
+        )
+
+    payload_size = 0
+
+    if payload_path is not None:
+        payload_size = payload_path.stat().st_size
+
+        if payload_size > MAX_PAYLOAD_SIZE:
+            raise ValueError(
+                "処理後ファイルが4GBを超えています。"
+            )
+
+    header_bytes = create_mmp_header(
+        len(json_bytes),
+        len(media_type_bytes),
+        payload_size,
+    )
+
+    conn.sendall(header_bytes)
+    conn.sendall(json_bytes)
+
+    if media_type_bytes:
+        conn.sendall(media_type_bytes)
+
+    if payload_path is not None:
+        send_file(conn, payload_path)
+
+
+def send_error_response(
+    conn: socket.socket,
+    message: str,
+) -> None:
+    """
+    エラー情報をJSONとしてクライアントへ返す。
+    """
+    # FFmpegの標準エラー出力が非常に長い場合に備えて制限する
+    limited_message = message[:2000]
+
+    try:
+        send_response(
+            conn,
+            {
+                "status": "error",
+                "message": limited_message,
+            },
+        )
+    except OSError:
+        # すでに接続が切れている場合は送信できない
+        pass
+
+
 def get_params(request_data: dict) -> dict:
-    """
-    JSONのparamsを取得する。
-    paramsがない場合は空の辞書として扱う。
-    """
     params = request_data.get("params", {})
 
     if not isinstance(params, dict):
@@ -156,10 +266,6 @@ def require_positive_integer(
     params: dict,
     parameter_name: str,
 ) -> int:
-    """
-    0より大きい整数の引数を取得する。
-    boolはPythonではintの一種なので明示的に除外する。
-    """
     value = params.get(parameter_name)
 
     if isinstance(value, bool) or not isinstance(value, int):
@@ -179,9 +285,6 @@ def require_non_negative_number(
     params: dict,
     parameter_name: str,
 ) -> float:
-    """
-    0以上の数値の引数を取得する。
-    """
     value = params.get(parameter_name)
 
     if isinstance(value, bool) or not isinstance(
@@ -204,9 +307,6 @@ def require_positive_number(
     params: dict,
     parameter_name: str,
 ) -> float:
-    """
-    0より大きい数値の引数を取得する。
-    """
     value = params.get(parameter_name)
 
     if isinstance(value, bool) or not isinstance(
@@ -231,8 +331,7 @@ def dispatch_operation(
     work_dir: Path,
 ) -> Path:
     """
-    operationの内容に応じて、
-    processor.pyの対応する関数を呼び出す。
+    operationに応じてprocessor.pyの関数を呼び出す。
     """
     operation = request_data.get("operation")
 
@@ -345,6 +444,8 @@ def dispatch_operation(
 def handle_client(conn: socket.socket, addr) -> None:
     print(f"[接続] {addr}")
 
+    conn.settimeout(CLIENT_TIMEOUT_SECONDS)
+
     try:
         header_bytes = recv_exact(conn, HEADER_SIZE)
 
@@ -398,14 +499,59 @@ def handle_client(conn: socket.socket, addr) -> None:
                 work_dir,
             )
 
-            print(f"[動画処理完了] {result_path}")
-            print(
-                f"[処理後サイズ] "
-                f"{result_path.stat().st_size} bytes"
+            output_suffix = result_path.suffix.lower()
+            output_media_type = OUTPUT_MEDIA_TYPES.get(
+                output_suffix,
+                "application/octet-stream",
             )
 
+            response_data = {
+                "status": "success",
+                "operation": request_data.get("operation"),
+                "filename": result_path.name,
+                "file_size": result_path.stat().st_size,
+            }
+
+            send_response(
+                conn,
+                response_data,
+                media_type=output_media_type,
+                payload_path=result_path,
+            )
+
+            print(f"[動画処理完了] {result_path}")
+            print(f"[レスポンス送信完了] {addr}")
+
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        ValueError,
+        TypeError,
+        FileNotFoundError,
+        FFmpegProcessError,
+    ) as exc:
+        print(f"[処理エラー] {addr}: {exc}")
+        send_error_response(conn, str(exc))
+
+    except socket.timeout:
+        print(f"[タイムアウト] {addr}")
+        send_error_response(
+            conn,
+            "通信がタイムアウトしました。",
+        )
+
+    except ConnectionError as exc:
+        print(f"[通信エラー] {addr}: {exc}")
+
+    except OSError as exc:
+        print(f"[ソケットエラー] {addr}: {exc}")
+
     except Exception as exc:
-        print(f"[エラー] {addr}: {exc}")
+        print(f"[予期しないエラー] {addr}: {exc}")
+        send_error_response(
+            conn,
+            "サーバー内部で予期しないエラーが発生しました。",
+        )
 
     finally:
         conn.close()
@@ -413,6 +559,10 @@ def handle_client(conn: socket.socket, addr) -> None:
 
 
 def start_server() -> None:
+    """
+    TCPサーバーを起動し、
+    クライアントからの接続を繰り返し受け付ける。
+    """
     with socket.socket(
         socket.AF_INET,
         socket.SOCK_STREAM
@@ -429,9 +579,13 @@ def start_server() -> None:
 
         print(f"Server listening on {HOST}:{PORT}")
 
-        while True:
-            conn, addr = server_socket.accept()
-            handle_client(conn, addr)
+        try:
+            while True:
+                conn, addr = server_socket.accept()
+                handle_client(conn, addr)
+
+        except KeyboardInterrupt:
+            print("\nサーバーを終了します。")
 
 
 if __name__ == "__main__":
