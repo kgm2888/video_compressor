@@ -4,8 +4,24 @@ import tempfile
 from pathlib import Path
 
 try:
+    from .processor import (
+        change_aspect_ratio,
+        compress_video,
+        convert_to_mp3,
+        create_gif,
+        create_webm,
+        resize_video,
+    )
     from .protocol import unpack_mmp_header
 except ImportError:
+    from processor import (
+        change_aspect_ratio,
+        compress_video,
+        convert_to_mp3,
+        create_gif,
+        create_webm,
+        resize_video,
+    )
     from protocol import unpack_mmp_header
 
 
@@ -15,14 +31,8 @@ PORT = 9000
 HEADER_SIZE = 8
 BUFFER_SIZE = 64 * 1024
 
-# protocol.pyではJSONサイズを2バイトで表す
 MAX_JSON_SIZE = (1 << 16) - 1
-
-# メディアタイプサイズは1バイト
 MAX_MEDIA_TYPE_SIZE = (1 << 8) - 1
-
-# 動画サイズは5バイトだが、
-# 今回はStage1と同じく最大4GBに制限する
 MAX_PAYLOAD_SIZE = 4 * 1024 * 1024 * 1024
 
 
@@ -36,11 +46,17 @@ MEDIA_TYPE_SUFFIXES = {
 }
 
 
+OUTPUT_SUFFIXES = {
+    "compress_video": ".mp4",
+    "resize_video": ".mp4",
+    "change_aspect_ratio": ".mp4",
+    "convert_to_mp3": ".mp3",
+    "create_gif": ".gif",
+    "create_webm": ".webm",
+}
+
+
 def recv_exact(conn: socket.socket, size: int) -> bytes:
-    """
-    指定されたsizeバイトを受信し終わるまで、
-    conn.recv()を繰り返す。
-    """
     data = b""
 
     while len(data) < size:
@@ -61,10 +77,6 @@ def validate_request_sizes(
     media_type_size: int,
     payload_size: int,
 ) -> None:
-    """
-    共通ヘッダーに書かれていた各サイズが、
-    サーバーで受け付けられる範囲か確認する。
-    """
     if json_size <= 0:
         raise ValueError("JSONサイズが0以下です。")
 
@@ -88,10 +100,6 @@ def decide_input_suffix(
     request_data: dict,
     media_type: str,
 ) -> str:
-    """
-    JSON内のfilename、またはメディアタイプから
-    入力ファイルの拡張子を決める。
-    """
     filename = request_data.get("filename")
 
     if isinstance(filename, str):
@@ -108,10 +116,6 @@ def receive_file(
     file_path: Path,
     file_size: int,
 ) -> None:
-    """
-    クライアントから送られてくる動画ファイルを
-    分割して受信し、file_pathへ保存する。
-    """
     received_size = 0
 
     with file_path.open("wb") as output_file:
@@ -135,11 +139,210 @@ def receive_file(
         )
 
 
+def get_params(request_data: dict) -> dict:
+    """
+    JSONのparamsを取得する。
+    paramsがない場合は空の辞書として扱う。
+    """
+    params = request_data.get("params", {})
+
+    if not isinstance(params, dict):
+        raise ValueError("paramsはJSONオブジェクトにしてください。")
+
+    return params
+
+
+def require_positive_integer(
+    params: dict,
+    parameter_name: str,
+) -> int:
+    """
+    0より大きい整数の引数を取得する。
+    boolはPythonではintの一種なので明示的に除外する。
+    """
+    value = params.get(parameter_name)
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            f"{parameter_name}は整数で指定してください。"
+        )
+
+    if value <= 0:
+        raise ValueError(
+            f"{parameter_name}は0より大きい値にしてください。"
+        )
+
+    return value
+
+
+def require_non_negative_number(
+    params: dict,
+    parameter_name: str,
+) -> float:
+    """
+    0以上の数値の引数を取得する。
+    """
+    value = params.get(parameter_name)
+
+    if isinstance(value, bool) or not isinstance(
+        value,
+        (int, float),
+    ):
+        raise ValueError(
+            f"{parameter_name}は数値で指定してください。"
+        )
+
+    if value < 0:
+        raise ValueError(
+            f"{parameter_name}は0以上にしてください。"
+        )
+
+    return float(value)
+
+
+def require_positive_number(
+    params: dict,
+    parameter_name: str,
+) -> float:
+    """
+    0より大きい数値の引数を取得する。
+    """
+    value = params.get(parameter_name)
+
+    if isinstance(value, bool) or not isinstance(
+        value,
+        (int, float),
+    ):
+        raise ValueError(
+            f"{parameter_name}は数値で指定してください。"
+        )
+
+    if value <= 0:
+        raise ValueError(
+            f"{parameter_name}は0より大きい値にしてください。"
+        )
+
+    return float(value)
+
+
+def dispatch_operation(
+    request_data: dict,
+    input_path: Path,
+    work_dir: Path,
+) -> Path:
+    """
+    operationの内容に応じて、
+    processor.pyの対応する関数を呼び出す。
+    """
+    operation = request_data.get("operation")
+
+    if not isinstance(operation, str) or not operation:
+        raise ValueError("operationが指定されていません。")
+
+    if operation not in OUTPUT_SUFFIXES:
+        raise ValueError(
+            f"未対応のoperationです: {operation}"
+        )
+
+    params = get_params(request_data)
+
+    output_suffix = OUTPUT_SUFFIXES[operation]
+    output_path = work_dir / f"output{output_suffix}"
+
+    if operation == "compress_video":
+        result_path = compress_video(
+            input_path,
+            output_path,
+        )
+
+    elif operation == "resize_video":
+        width = require_positive_integer(
+            params,
+            "width",
+        )
+        height = require_positive_integer(
+            params,
+            "height",
+        )
+
+        result_path = resize_video(
+            input_path,
+            output_path,
+            width,
+            height,
+        )
+
+    elif operation == "change_aspect_ratio":
+        aspect_ratio = params.get("aspect_ratio")
+
+        if aspect_ratio not in {"16:9", "4:3", "1:1"}:
+            raise ValueError(
+                "aspect_ratioは16:9、4:3、1:1の"
+                "いずれかを指定してください。"
+            )
+
+        result_path = change_aspect_ratio(
+            input_path,
+            output_path,
+            aspect_ratio,
+        )
+
+    elif operation == "convert_to_mp3":
+        result_path = convert_to_mp3(
+            input_path,
+            output_path,
+        )
+
+    elif operation == "create_gif":
+        start_time = require_non_negative_number(
+            params,
+            "start_time",
+        )
+        duration = require_positive_number(
+            params,
+            "duration",
+        )
+
+        result_path = create_gif(
+            input_path,
+            output_path,
+            start_time,
+            duration,
+        )
+
+    elif operation == "create_webm":
+        start_time = require_non_negative_number(
+            params,
+            "start_time",
+        )
+        duration = require_positive_number(
+            params,
+            "duration",
+        )
+
+        result_path = create_webm(
+            input_path,
+            output_path,
+            start_time,
+            duration,
+        )
+
+    else:
+        raise ValueError(
+            f"未対応のoperationです: {operation}"
+        )
+
+    result_path = Path(result_path)
+
+    if not result_path.is_file():
+        raise FileNotFoundError(
+            "processor.pyの処理後ファイルが見つかりません。"
+        )
+
+    return result_path
+
+
 def handle_client(conn: socket.socket, addr) -> None:
-    """
-    1人のクライアントから、
-    JSON・メディアタイプ・動画を受信する。
-    """
     print(f"[接続] {addr}")
 
     try:
@@ -155,7 +358,6 @@ def handle_client(conn: socket.socket, addr) -> None:
             payload_size,
         )
 
-        # JSONデータを受信する
         json_bytes = recv_exact(conn, json_size)
         json_text = json_bytes.decode("utf-8")
         request_data = json.loads(json_text)
@@ -165,7 +367,6 @@ def handle_client(conn: socket.socket, addr) -> None:
                 "JSONの一番外側はオブジェクトである必要があります。"
             )
 
-        # メディアタイプを受信する
         media_type_bytes = recv_exact(conn, media_type_size)
         media_type = media_type_bytes.decode("utf-8")
 
@@ -174,7 +375,6 @@ def handle_client(conn: socket.socket, addr) -> None:
             media_type,
         )
 
-        # 一時フォルダは処理終了後に自動削除される
         with tempfile.TemporaryDirectory(
             prefix="video_compressor_"
         ) as temporary_directory:
@@ -191,7 +391,18 @@ def handle_client(conn: socket.socket, addr) -> None:
             print(f"[JSON受信] {request_data}")
             print(f"[メディアタイプ] {media_type}")
             print(f"[動画受信完了] {input_path}")
-            print(f"[動画サイズ] {input_path.stat().st_size} bytes")
+
+            result_path = dispatch_operation(
+                request_data,
+                input_path,
+                work_dir,
+            )
+
+            print(f"[動画処理完了] {result_path}")
+            print(
+                f"[処理後サイズ] "
+                f"{result_path.stat().st_size} bytes"
+            )
 
     except Exception as exc:
         print(f"[エラー] {addr}: {exc}")
@@ -202,9 +413,6 @@ def handle_client(conn: socket.socket, addr) -> None:
 
 
 def start_server() -> None:
-    """
-    TCPサーバーを起動し、クライアントからの接続を待つ。
-    """
     with socket.socket(
         socket.AF_INET,
         socket.SOCK_STREAM
