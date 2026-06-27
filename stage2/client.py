@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import socket
 from protocol import create_mmp_header
 
@@ -89,5 +90,32 @@ except socket.error as err:
     print(err)
     sys.exit(1)
 
-header = create_mmp_header(json_size, media_type_size, payload_size)
-sock.send(header)
+try:
+    header = create_mmp_header(json_size, media_type_size, payload_size)
+    sock.send(header)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    sock.send(json_bytes)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    sock.send(media_type.encode("utf-8"))
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    with open(filepath, 'rb') as f:
+        data = f.read(4096)
+        while data:
+            print("Sending...")
+            sock.send(data)
+            data = f.read(4096)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
