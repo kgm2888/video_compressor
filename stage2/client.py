@@ -127,10 +127,10 @@ dpath = 'output'
 if not os.path.exists(dpath):
     os.makedirs(dpath)
 try:
-    header = connection.recv(8)
+    header = socket.recv(8)
     json_size, media_type_size, payload_size =unpack_mmp_header(header)
-    connection.recv(json_size)
-    connection.recv(media_type_size)
+    socket.recv(json_size)
+    socket.recv(media_type_size)
 except socket.error as err:
     print(err)
     sys.exit(1)
@@ -138,11 +138,10 @@ except socket.error as err:
 try:
     with open(filepath, 'wb') as f:
         while payload_size > 0:  
-            data = connection.recv(4096)
+            data = socket.recv(4096)
             f.write(data)
             print('recieved {} bytes'.format(len(data)))
             payload_size -= len(data)
-            print(data_length)
     print('Finished downloading the file from server.')
 
 except Exception as e:
