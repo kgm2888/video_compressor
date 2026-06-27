@@ -78,6 +78,9 @@ payload_size = os.path.getsize(filepath)
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_address = input("Type in the server's address to connect to: ")
 server_port = 9001
+root, ext = os.path.splitext(filepath)
+media_type = ext[1:]
+media_type_size = len(media_type)
 print('connecting to {}'.format(server_address, server_port))
 
 try:
@@ -86,5 +89,5 @@ except socket.error as err:
     print(err)
     sys.exit(1)
 
-try:
-    protocol_header = create_mmp_header(json_size, media_type_size, payload_size)
+header = create_mmp_header(json_size, media_type_size, payload_size)
+sock.send(header)
