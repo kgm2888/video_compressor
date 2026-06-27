@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import json
 import socket
 from pathlib import Path
@@ -78,7 +79,7 @@ print(f"ファイルサイズ: {file_size} bytes")
 payload_size = os.path.getsize(filepath)
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server_address = input("Type in the server's address to connect to: ")
+server_address = input("ファイルの動画のパスを入力してください: ")
 server_port = 9001
 root, ext = os.path.splitext(filepath)
 media_type = ext[1:]
@@ -121,7 +122,16 @@ except socket.error as err:
     print(err)
     sys.exit(1)
 
-
+try:
+    Progressconfirmation= "False".encode("utf-8")
+    while True:
+        sock.send(Progressconfirmation)
+        Progressconfirmation = sock.recv(4096) 
+        if Progressconfirmation == "False":
+            print("サーバー側で処理中です")
+            time.sleep(60)
+        else:
+            break
 
 dpath = 'output'
 if not os.path.exists(dpath):
