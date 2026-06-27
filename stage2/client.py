@@ -1,0 +1,121 @@
+import os
+import sys
+import json
+import socket
+from protocol import create_mmp_header
+
+#メニュー表示
+print("動画処理を行うプログラムです。")
+print("1:動画の圧縮")
+print("2:動画の解像度変更")
+print("3:動画のアスペクト比を変更")
+print("4:動画の音声抽出")
+print("5:動画の指定範囲をGIFに変換")
+print("6:動画の指定範囲をWEBMに変換する")
+#ターミナルで処理番号を選択してもらう。
+try:
+    FunctionNumber = input("処理番号を入力してください: ")
+    if FunctionNumber not in ["1", "2", "3", "4", "5", "6"]:
+        raise ValueError("Invalid input")
+except ValueError as err:
+    print("1~6の数字を入力してください。")
+    sys.exit(1)
+#それぞれの番号に合わせて、jsonファイルを作成
+if FunctionNumber == "1":
+    json_string = f'{{"operation": "compress"}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+elif FunctionNumber == "2":
+    input_width = int(input("動画の幅を入力してください:"))
+    input_height = int(input("動画の高さを入力してください:"))
+    json_string = f'{{"operation": "resize", "width": {input_width}, "height": {input_height}}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+elif FunctionNumber == "3":
+    input_aspect_ratio = input("動画のアスペクト比をこの中から16:9,4:3,1:1選んでください:")
+    json_string = f'{{"operation": "change_aspect_ratio", "aspect_ratio": "{input_aspect_ratio}"}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+elif FunctionNumber == "4":
+    json_string = f'{{"operation": "convert_to_mp3"}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+elif FunctionNumber == "5":
+    input_start_time = int(input("開始時間を入力してください"))
+    input_duration = int(input("間隔時間を入力してください"))
+    json_string = f'{{"operation": "create_gif","start_time":{input_start_time},"duration":{input_duration}}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+elif FunctionNumber == "6":
+    input_start_time = int(input("開始時間を入力してください"))
+    input_duration = int(input("間隔時間を入力してください"))
+    json_string = f'{{"operation": "create_webm","start_time":{input_start_time},"duration":{input_duration}}}'
+    json_bytes = json_string.encode("utf-8")
+    json_size = len(json_bytes)
+
+filepath = input('type in a file to upload: ')
+if not os.path.exists(filepath):
+    print("指定されたファイルが存在しません。")
+    sys.exit(1)
+if not os.path.isfile(filepath):
+    print("指定されたパスはファイルではありません。")
+    sys.exit(1)
+if not filepath.lower().endswith(".mp4"):
+    print("mp4ファイルのみ送信できます。")
+    sys.exit(1)
+file_size = os.path.getsize(filepath)
+if file_size <= 0:
+    print("空のファイルは送信できません。")
+    sys.exit(1)
+print(f"送信ファイル: {filepath}")
+print(f"ファイルサイズ: {file_size} bytes")
+payload_size = os.path.getsize(filepath)
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_address = input("Type in the server's address to connect to: ")
+server_port = 9001
+root, ext = os.path.splitext(filepath)
+media_type = ext[1:]
+media_type_size = len(media_type)
+print('connecting to {}'.format(server_address, server_port))
+
+try:
+    sock.connect((server_address, server_port))
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    header = create_mmp_header(json_size, media_type_size, payload_size)
+    sock.send(header)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    sock.send(json_bytes)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    sock.send(media_type.encode("utf-8"))
+except socket.error as err:
+    print(err)
+    sys.exit(1)
+
+try:
+    with open(filepath, 'rb') as f:
+        data = f.read(4096)
+        while data:
+            print("Sending...")
+            sock.send(data)
+            data = f.read(4096)
+except socket.error as err:
+    print(err)
+    sys.exit(1)
