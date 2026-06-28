@@ -5,6 +5,7 @@ from pathlib import Path
 from processor import (
     change_aspect_ratio,
     compress_video,
+    convert_to_mp3,
     resize_video,
 )
 from protocol import create_mmp_header, unpack_mmp_header
@@ -77,7 +78,14 @@ def send_processed_file(
         ensure_ascii=False,
     ).encode("utf-8")
 
-    media_type_bytes = b"mp4"
+    media_type = output_path.suffix.lstrip(".")
+
+    if not media_type:
+        raise ValueError(
+            "出力ファイルの拡張子を取得できません"
+        )
+
+    media_type_bytes = media_type.encode("utf-8")
     payload_size = output_path.stat().st_size
 
     header = create_mmp_header(
@@ -138,7 +146,6 @@ def handle_client(connection, client_address):
     """1回のリクエストを受信・処理・返信する。"""
     print("connection from", client_address)
 
-    # MMPヘッダーを受信する
     header = recv_exact(
         connection,
         HEADER_SIZE,
@@ -163,7 +170,6 @@ def handle_client(connection, client_address):
             "動画ファイルが送信されていません"
         )
 
-    # JSONを受信する
     json_bytes = recv_exact(
         connection,
         json_size,
@@ -173,7 +179,6 @@ def handle_client(connection, client_address):
         json_bytes.decode("utf-8")
     )
 
-    # media typeを受信する
     media_type_bytes = recv_exact(
         connection,
         media_type_size,
@@ -199,7 +204,6 @@ def handle_client(connection, client_address):
         TEMP_DIR / "uploaded_video.mp4"
     )
 
-    # 動画を受信して一時保存する
     receive_file(
         connection,
         input_path,
@@ -293,13 +297,26 @@ def handle_client(connection, client_address):
             "完了しました"
         )
 
+    elif operation == "convert_to_mp3":
+        output_path = (
+            TEMP_DIR / "converted_audio.mp3"
+        )
+
+        convert_to_mp3(
+            input_path,
+            output_path,
+        )
+
+        print(
+            "動画からMP3への変換が完了しました"
+        )
+
     else:
         raise ValueError(
             f"対応していないoperationです: "
             f"{operation}"
         )
 
-    # 処理後の動画を返信する
     send_processed_file(
         connection,
         operation,
