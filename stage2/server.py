@@ -7,6 +7,7 @@ from processor import (
     compress_video,
     convert_to_mp3,
     create_gif,
+    create_webm,
     resize_video,
 )
 from protocol import create_mmp_header, unpack_mmp_header
@@ -242,7 +243,9 @@ def handle_client(connection, client_address):
 
         if (
             not isinstance(width, int)
+            or isinstance(width, bool)
             or not isinstance(height, int)
+            or isinstance(height, bool)
             or width <= 0
             or height <= 0
         ):
@@ -353,6 +356,49 @@ def handle_client(connection, client_address):
 
         print(
             "動画からGIFへの変換が完了しました"
+        )
+
+    elif operation == "create_webm":
+        start_time = request_data.get(
+            "start_time"
+        )
+        duration = request_data.get(
+            "duration"
+        )
+
+        if (
+            not isinstance(start_time, (int, float))
+            or isinstance(start_time, bool)
+            or start_time < 0
+        ):
+            raise ValueError(
+                "start_timeには0以上の"
+                "数値を指定してください"
+            )
+
+        if (
+            not isinstance(duration, (int, float))
+            or isinstance(duration, bool)
+            or duration <= 0
+        ):
+            raise ValueError(
+                "durationには0より大きい"
+                "数値を指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR / "converted_video.webm"
+        )
+
+        create_webm(
+            input_path,
+            output_path,
+            start_time,
+            duration,
+        )
+
+        print(
+            "動画からWebMへの変換が完了しました"
         )
 
     else:
