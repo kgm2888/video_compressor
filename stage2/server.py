@@ -2,7 +2,11 @@ import json
 import socket
 from pathlib import Path
 
-from processor import compress_video, resize_video
+from processor import (
+    change_aspect_ratio,
+    compress_video,
+    resize_video,
+)
 from protocol import create_mmp_header, unpack_mmp_header
 
 
@@ -255,6 +259,38 @@ def handle_client(connection, client_address):
 
         print(
             "動画の解像度変更が完了しました"
+        )
+
+    elif operation == "change_aspect_ratio":
+        aspect_ratio = request_data.get(
+            "aspect_ratio"
+        )
+
+        if aspect_ratio not in {
+            "16:9",
+            "4:3",
+            "1:1",
+        }:
+            raise ValueError(
+                "aspect_ratioには"
+                "16:9、4:3、1:1の"
+                "いずれかを指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR
+            / "aspect_ratio_changed_video.mp4"
+        )
+
+        change_aspect_ratio(
+            input_path,
+            output_path,
+            aspect_ratio,
+        )
+
+        print(
+            "動画のアスペクト比変更が"
+            "完了しました"
         )
 
     else:
