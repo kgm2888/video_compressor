@@ -2,7 +2,7 @@ import json
 import socket
 from pathlib import Path
 
-from processor import compress_video
+from processor import compress_video, resize_video
 from protocol import create_mmp_header, unpack_mmp_header
 
 
@@ -23,7 +23,9 @@ def recv_exact(connection, size):
         chunk = connection.recv(size - len(received))
 
         if not chunk:
-            raise ConnectionError("データ受信中に接続が切れました")
+            raise ConnectionError(
+                "データ受信中に接続が切れました"
+            )
 
         received.extend(chunk)
 
@@ -36,18 +38,29 @@ def receive_file(connection, file_path, file_size):
 
     with file_path.open("wb") as file:
         while remaining_size > 0:
-            chunk = connection.recv(min(CHUNK_SIZE, remaining_size))
+            chunk = connection.recv(
+                min(CHUNK_SIZE, remaining_size)
+            )
 
             if not chunk:
-                raise ConnectionError("動画受信中に接続が切れました")
+                raise ConnectionError(
+                    "動画受信中に接続が切れました"
+                )
 
             file.write(chunk)
             remaining_size -= len(chunk)
 
-            print(f"残り受信サイズ: {remaining_size} bytes")
+            print(
+                f"残り受信サイズ: "
+                f"{remaining_size} bytes"
+            )
 
 
-def send_processed_file(connection, operation, output_path):
+def send_processed_file(
+    connection,
+    operation,
+    output_path,
+):
     """処理後ファイルをMMP形式でクライアントへ返す。"""
     response_data = {
         "status": "success",
@@ -82,10 +95,18 @@ def send_processed_file(connection, operation, output_path):
 
             connection.sendall(chunk)
 
-    print("処理後ファイルをクライアントへ送信しました")
+    print(
+        "処理後ファイルを"
+        "クライアントへ送信しました"
+    )
 
 
-def send_error(connection, error_code, description, solution):
+def send_error(
+    connection,
+    error_code,
+    description,
+    solution,
+):
     """エラー情報をJSONだけで返す。"""
     error_data = {
         "status": "error",
@@ -114,70 +135,135 @@ def handle_client(connection, client_address):
     print("connection from", client_address)
 
     # MMPヘッダーを受信する
-    header = recv_exact(connection, HEADER_SIZE)
+    header = recv_exact(
+        connection,
+        HEADER_SIZE,
+    )
 
-    json_size, media_type_size, payload_size = unpack_mmp_header(
-        header
+    json_size, media_type_size, payload_size = (
+        unpack_mmp_header(header)
     )
 
     if json_size == 0:
-        raise ValueError("JSONが送信されていません")
+        raise ValueError(
+            "JSONが送信されていません"
+        )
 
     if media_type_size == 0:
-        raise ValueError("media typeが送信されていません")
+        raise ValueError(
+            "media typeが送信されていません"
+        )
 
     if payload_size == 0:
-        raise ValueError("動画ファイルが送信されていません")
+        raise ValueError(
+            "動画ファイルが送信されていません"
+        )
 
     # JSONを受信する
-    json_bytes = recv_exact(connection, json_size)
-    request_data = json.loads(json_bytes.decode("utf-8"))
+    json_bytes = recv_exact(
+        connection,
+        json_size,
+    )
+
+    request_data = json.loads(
+        json_bytes.decode("utf-8")
+    )
 
     # media typeを受信する
     media_type_bytes = recv_exact(
         connection,
         media_type_size,
     )
-    media_type = media_type_bytes.decode("utf-8")
+
+    media_type = media_type_bytes.decode(
+        "utf-8"
+    )
 
     print("Request:", request_data)
     print("Media type:", media_type)
 
-    # mp4またはvideo/mp4の両方に対応する
-    if media_type not in {"mp4", "video/mp4"}:
+    if media_type not in {
+        "mp4",
+        "video/mp4",
+    }:
         raise ValueError(
-            f"対応していないmedia typeです: {media_type}"
+            f"対応していないmedia typeです: "
+            f"{media_type}"
         )
 
-    input_path = TEMP_DIR / "uploaded_video.mp4"
-    output_path = TEMP_DIR / "compressed_video.mp4"
+    input_path = (
+        TEMP_DIR / "uploaded_video.mp4"
+    )
 
-    # 動画を受信して保存する
+    # 動画を受信して一時保存する
     receive_file(
         connection,
         input_path,
         payload_size,
     )
 
-    print("動画ファイルの受信が完了しました")
-
-    operation = request_data.get("operation")
-
-    # client側の表記が未確定なので一時的に両方に対応する
-    if operation not in {"compress", "compress_video"}:
-        raise ValueError(
-            f"対応していないoperationです: {operation}"
-        )
-
-    # processor.pyの圧縮処理を呼ぶ
-    compress_video(
-        input_path,
-        output_path,
+    print(
+        "動画ファイルの受信が完了しました"
     )
 
-    print("動画の圧縮が完了しました")
+    operation = request_data.get(
+        "operation"
+    )
 
-    # 圧縮後の動画を返信する
+    if operation in {
+        "compress",
+        "compress_video",
+    }:
+        output_path = (
+            TEMP_DIR / "compressed_video.mp4"
+        )
+
+        compress_video(
+            input_path,
+            output_path,
+        )
+
+        print(
+            "動画の圧縮が完了しました"
+        )
+
+    elif operation == "resize":
+        width = request_data.get("width")
+        height = request_data.get("height")
+
+        if (
+            not isinstance(width, int)
+            or not isinstance(height, int)
+            or width <= 0
+            or height <= 0
+        ):
+            raise ValueError(
+                "widthとheightには"
+                "正の整数を指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR / "resized_video.mp4"
+        )
+
+        resize_video(
+            input_path,
+            output_path,
+            width,
+            height,
+        )
+
+        print(
+            "動画の解像度変更が完了しました"
+        )
+
+    else:
+        raise ValueError(
+            f"対応していないoperationです: "
+            f"{operation}"
+        )
+
+    # 処理後の動画を返信する
     send_processed_file(
         connection,
         operation,
@@ -198,13 +284,18 @@ def start_server():
         )
 
         server_socket.bind(
-            (SERVER_ADDRESS, SERVER_PORT)
+            (
+                SERVER_ADDRESS,
+                SERVER_PORT,
+            )
         )
+
         server_socket.listen(1)
 
         print(
             f"starting up on "
-            f"{SERVER_ADDRESS} port {SERVER_PORT}"
+            f"{SERVER_ADDRESS} "
+            f"port {SERVER_PORT}"
         )
 
         while True:
@@ -220,14 +311,21 @@ def start_server():
                     )
 
                 except Exception as error:
-                    print("Error:", error)
+                    print(
+                        "Error:",
+                        error,
+                    )
 
                     try:
                         send_error(
                             connection,
                             "PROCESSING_ERROR",
                             str(error),
-                            "送信内容と動画ファイルを確認してください",
+                            (
+                                "送信内容と"
+                                "動画ファイルを"
+                                "確認してください"
+                            ),
                         )
 
                     except OSError:
@@ -237,7 +335,9 @@ def start_server():
                         )
 
                 finally:
-                    print("Closing current connection")
+                    print(
+                        "Closing current connection"
+                    )
 
 
 if __name__ == "__main__":
