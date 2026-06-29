@@ -1,0 +1,509 @@
+import json
+import socket
+from pathlib import Path
+
+from processor import (
+    change_aspect_ratio,
+    compress_video,
+    convert_to_mp3,
+    create_gif,
+    create_webm,
+    resize_video,
+)
+from protocol import create_mmp_header, unpack_mmp_header
+
+
+SERVER_ADDRESS = "0.0.0.0"
+SERVER_PORT = 9001
+HEADER_SIZE = 8
+CHUNK_SIZE = 1400
+
+TEMP_DIR = Path(__file__).resolve().parent / "temp"
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cleanup_temp_files():
+    """tempフォルダ内の一時ファイルを削除する。"""
+    for file_path in TEMP_DIR.iterdir():
+        if not file_path.is_file():
+            continue
+
+        try:
+            file_path.unlink()
+            print(
+                f"一時ファイルを削除しました: "
+                f"{file_path.name}"
+            )
+
+        except OSError as error:
+            print(
+                f"一時ファイルを削除できませんでした: "
+                f"{file_path.name}: {error}"
+            )
+
+
+def recv_exact(connection, size):
+    """指定されたサイズを受信し終わるまで繰り返す。"""
+    received = bytearray()
+
+    while len(received) < size:
+        chunk = connection.recv(size - len(received))
+
+        if not chunk:
+            raise ConnectionError(
+                "データ受信中に接続が切れました"
+            )
+
+        received.extend(chunk)
+
+    return bytes(received)
+
+
+def receive_file(connection, file_path, file_size):
+    """payloadを分割してファイルへ保存する。"""
+    remaining_size = file_size
+
+    with file_path.open("wb") as file:
+        while remaining_size > 0:
+            chunk = connection.recv(
+                min(CHUNK_SIZE, remaining_size)
+            )
+
+            if not chunk:
+                raise ConnectionError(
+                    "動画受信中に接続が切れました"
+                )
+
+            file.write(chunk)
+            remaining_size -= len(chunk)
+
+            print(
+                f"残り受信サイズ: "
+                f"{remaining_size} bytes"
+            )
+
+
+def send_processed_file(
+    connection,
+    operation,
+    output_path,
+):
+    """処理後ファイルをMMP形式でクライアントへ返す。"""
+    response_data = {
+        "status": "success",
+        "operation": operation,
+        "filename": output_path.name,
+    }
+
+    json_bytes = json.dumps(
+        response_data,
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    media_type = output_path.suffix.lstrip(".")
+
+    if not media_type:
+        raise ValueError(
+            "出力ファイルの拡張子を取得できません"
+        )
+
+    media_type_bytes = media_type.encode("utf-8")
+    payload_size = output_path.stat().st_size
+
+    header = create_mmp_header(
+        len(json_bytes),
+        len(media_type_bytes),
+        payload_size,
+    )
+
+    connection.sendall(header)
+    connection.sendall(json_bytes)
+    connection.sendall(media_type_bytes)
+
+    with output_path.open("rb") as file:
+        while True:
+            chunk = file.read(CHUNK_SIZE)
+
+            if not chunk:
+                break
+
+            connection.sendall(chunk)
+
+    print(
+        "処理後ファイルを"
+        "クライアントへ送信しました"
+    )
+
+
+def send_error(
+    connection,
+    error_code,
+    description,
+    solution,
+):
+    """エラー情報をJSONだけで返す。"""
+    error_data = {
+        "status": "error",
+        "error_code": error_code,
+        "description": description,
+        "solution": solution,
+    }
+
+    json_bytes = json.dumps(
+        error_data,
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+    header = create_mmp_header(
+        len(json_bytes),
+        0,
+        0,
+    )
+
+    connection.sendall(header)
+    connection.sendall(json_bytes)
+
+
+def handle_client(connection, client_address):
+    """1回のリクエストを受信・処理・返信する。"""
+    print("connection from", client_address)
+
+    header = recv_exact(
+        connection,
+        HEADER_SIZE,
+    )
+
+    json_size, media_type_size, payload_size = (
+        unpack_mmp_header(header)
+    )
+
+    if json_size == 0:
+        raise ValueError(
+            "JSONが送信されていません"
+        )
+
+    if media_type_size == 0:
+        raise ValueError(
+            "media typeが送信されていません"
+        )
+
+    if payload_size == 0:
+        raise ValueError(
+            "動画ファイルが送信されていません"
+        )
+
+    json_bytes = recv_exact(
+        connection,
+        json_size,
+    )
+
+    request_data = json.loads(
+        json_bytes.decode("utf-8")
+    )
+
+    media_type_bytes = recv_exact(
+        connection,
+        media_type_size,
+    )
+
+    media_type = media_type_bytes.decode(
+        "utf-8"
+    )
+
+    print("Request:", request_data)
+    print("Media type:", media_type)
+
+    if media_type not in {
+        "mp4",
+        "video/mp4",
+    }:
+        raise ValueError(
+            f"対応していないmedia typeです: "
+            f"{media_type}"
+        )
+
+    input_path = (
+        TEMP_DIR / "uploaded_video.mp4"
+    )
+
+    receive_file(
+        connection,
+        input_path,
+        payload_size,
+    )
+
+    print(
+        "動画ファイルの受信が完了しました"
+    )
+
+    operation = request_data.get(
+        "operation"
+    )
+
+    if operation in {
+        "compress",
+        "compress_video",
+    }:
+        output_path = (
+            TEMP_DIR / "compressed_video.mp4"
+        )
+
+        compress_video(
+            input_path,
+            output_path,
+        )
+
+        print(
+            "動画の圧縮が完了しました"
+        )
+
+    elif operation == "resize":
+        width = request_data.get("width")
+        height = request_data.get("height")
+
+        if (
+            not isinstance(width, int)
+            or isinstance(width, bool)
+            or not isinstance(height, int)
+            or isinstance(height, bool)
+            or width <= 0
+            or height <= 0
+        ):
+            raise ValueError(
+                "widthとheightには"
+                "正の整数を指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR / "resized_video.mp4"
+        )
+
+        resize_video(
+            input_path,
+            output_path,
+            width,
+            height,
+        )
+
+        print(
+            "動画の解像度変更が完了しました"
+        )
+
+    elif operation == "change_aspect_ratio":
+        aspect_ratio = request_data.get(
+            "aspect_ratio"
+        )
+
+        if aspect_ratio not in {
+            "16:9",
+            "4:3",
+            "1:1",
+        }:
+            raise ValueError(
+                "aspect_ratioには"
+                "16:9、4:3、1:1の"
+                "いずれかを指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR
+            / "aspect_ratio_changed_video.mp4"
+        )
+
+        change_aspect_ratio(
+            input_path,
+            output_path,
+            aspect_ratio,
+        )
+
+        print(
+            "動画のアスペクト比変更が"
+            "完了しました"
+        )
+
+    elif operation == "convert_to_mp3":
+        output_path = (
+            TEMP_DIR / "converted_audio.mp3"
+        )
+
+        convert_to_mp3(
+            input_path,
+            output_path,
+        )
+
+        print(
+            "動画からMP3への変換が完了しました"
+        )
+
+    elif operation == "create_gif":
+        start_time = request_data.get(
+            "start_time"
+        )
+        duration = request_data.get(
+            "duration"
+        )
+
+        if (
+            not isinstance(start_time, (int, float))
+            or isinstance(start_time, bool)
+            or start_time < 0
+        ):
+            raise ValueError(
+                "start_timeには0以上の"
+                "数値を指定してください"
+            )
+
+        if (
+            not isinstance(duration, (int, float))
+            or isinstance(duration, bool)
+            or duration <= 0
+        ):
+            raise ValueError(
+                "durationには0より大きい"
+                "数値を指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR / "converted_animation.gif"
+        )
+
+        create_gif(
+            input_path,
+            output_path,
+            start_time,
+            duration,
+        )
+
+        print(
+            "動画からGIFへの変換が完了しました"
+        )
+
+    elif operation == "create_webm":
+        start_time = request_data.get(
+            "start_time"
+        )
+        duration = request_data.get(
+            "duration"
+        )
+
+        if (
+            not isinstance(start_time, (int, float))
+            or isinstance(start_time, bool)
+            or start_time < 0
+        ):
+            raise ValueError(
+                "start_timeには0以上の"
+                "数値を指定してください"
+            )
+
+        if (
+            not isinstance(duration, (int, float))
+            or isinstance(duration, bool)
+            or duration <= 0
+        ):
+            raise ValueError(
+                "durationには0より大きい"
+                "数値を指定してください"
+            )
+
+        output_path = (
+            TEMP_DIR / "converted_video.webm"
+        )
+
+        create_webm(
+            input_path,
+            output_path,
+            start_time,
+            duration,
+        )
+
+        print(
+            "動画からWebMへの変換が完了しました"
+        )
+
+    else:
+        raise ValueError(
+            f"対応していないoperationです: "
+            f"{operation}"
+        )
+
+    send_processed_file(
+        connection,
+        operation,
+        output_path,
+    )
+
+
+def start_server():
+    """サーバーを起動して接続を待つ。"""
+    with socket.socket(
+        socket.AF_INET,
+        socket.SOCK_STREAM,
+    ) as server_socket:
+        server_socket.setsockopt(
+            socket.SOL_SOCKET,
+            socket.SO_REUSEADDR,
+            1,
+        )
+
+        server_socket.bind(
+            (
+                SERVER_ADDRESS,
+                SERVER_PORT,
+            )
+        )
+
+        server_socket.listen(1)
+
+        print(
+            f"starting up on "
+            f"{SERVER_ADDRESS} "
+            f"port {SERVER_PORT}"
+        )
+
+        while True:
+            connection, client_address = (
+                server_socket.accept()
+            )
+
+            with connection:
+                try:
+                    handle_client(
+                        connection,
+                        client_address,
+                    )
+
+                except Exception as error:
+                    print(
+                        "Error:",
+                        error,
+                    )
+
+                    try:
+                        send_error(
+                            connection,
+                            "PROCESSING_ERROR",
+                            str(error),
+                            (
+                                "送信内容と"
+                                "動画ファイルを"
+                                "確認してください"
+                            ),
+                        )
+
+                    except OSError:
+                        print(
+                            "クライアントへ"
+                            "エラーを返信できませんでした"
+                        )
+
+                finally:
+                    cleanup_temp_files()
+
+                    print(
+                        "Closing current connection"
+                    )
+
+
+if __name__ == "__main__":
+    start_server()
