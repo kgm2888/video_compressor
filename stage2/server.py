@@ -22,6 +22,26 @@ TEMP_DIR = Path(__file__).resolve().parent / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def cleanup_temp_files():
+    """tempフォルダ内の一時ファイルを削除する。"""
+    for file_path in TEMP_DIR.iterdir():
+        if not file_path.is_file():
+            continue
+
+        try:
+            file_path.unlink()
+            print(
+                f"一時ファイルを削除しました: "
+                f"{file_path.name}"
+            )
+
+        except OSError as error:
+            print(
+                f"一時ファイルを削除できませんでした: "
+                f"{file_path.name}: {error}"
+            )
+
+
 def recv_exact(connection, size):
     """指定されたサイズを受信し終わるまで繰り返す。"""
     received = bytearray()
@@ -478,6 +498,8 @@ def start_server():
                         )
 
                 finally:
+                    cleanup_temp_files()
+
                     print(
                         "Closing current connection"
                     )
