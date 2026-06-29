@@ -148,7 +148,7 @@ except socket.error as err:
         # もし返事が "False"（まだ処理中）なら、60秒待ってからループの先頭に戻る
 #       if Progressconfirmation == b"False" or Progressconfirmation == "False":
 #          print("サーバー側で処理中です")
-            time.sleep(60)
+#            time.sleep(60)
         #"True"が来たら、ループを脱出して受信フェーズへ進む
 #        else:
 #           break
